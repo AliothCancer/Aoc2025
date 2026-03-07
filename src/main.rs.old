@@ -1,0 +1,413 @@
+#![allow(unused)]
+
+mod functional;
+use std::{
+    fs::read_to_string,
+    hint::black_box,
+    ops::Add,
+    sync::{Arc, Mutex},
+    thread,
+};
+
+use criterion::criterion_main;
+use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
+
+use crate::black_box::main_black_box;
+mod black_box;
+fn test_result() {
+    let file = read_to_string("./src/input_big.txt").unwrap();
+    let lines: Vec<String> = file.lines().map(String::from).collect();
+    let mut digits_arr: [u32; LEN] = [0; LEN];
+    let results = [
+        lines.iter().map(|x| get_max(x)).sum::<u32>(), //
+        lines.iter().map(|x| get_max_direct_access(x)).sum::<u32>(),
+        lines
+            .iter()
+            .map(|x| get_max_direct_access_precise_alloc(x))
+            .sum::<u32>(),
+        lines.iter().map(|x| get_max_indices(x)).sum::<u32>(),
+        lines
+            .iter()
+            .map(|x| get_max_indices_as_bytes(x))
+            .sum::<u32>(),
+        lines
+            .iter()
+            .map(|x| get_max_indices_withcap(x))
+            .sum::<u32>(),
+        lines.clone().into_iter().map(get_max_iterator).sum::<u32>(),
+        lines
+            .iter()
+            .map(|x| get_max_iterator_precise_alloc(x))
+            .sum::<u32>(),
+        lines.iter().map(|x| get_max_claude(x)).sum::<u32>(),
+        //lines
+        //    .into_iter()
+        //    .map(|x| unsafe { get_max_claude_with_array(x, &mut digits_arr) })
+        //    .sum::<u32>(),
+    ];
+
+    assert!(results.iter().all(|x| matches!(x, 1748411)));
+}
+
+const LEN1: usize = 15;
+struct Data<const N: usize = 100> {
+    arr: [u32; N],
+}
+const LEN: usize = 15;
+const EXAMPLE: &str = "\
+987654321111111
+811111111111119
+234234234234278
+818181911112111
+";
+const CUSTOM_EXAMPLE: &str = "35797431795";
+fn main() {
+    let file = read_to_string("./src/input.txt").unwrap();
+    let mut lines = Vec::with_capacity(100);
+
+    EXAMPLE
+        .lines()
+        .enumerate()
+        .for_each(|(n, s)| lines.insert(n, s));
+
+    let t1 = std::time::Instant::now();
+
+    let total = lines
+        .iter()
+        .map(|line| get_max_part2::<12>(line))
+        .sum::<u64>();
+
+    let duration = t1.elapsed().as_micros();
+
+    //assert_eq!(total, 1748411);
+    println!("sol: {} duration: {} µs", total, duration);
+}
+struct State<const N: usize> {
+    numbers: [u8; N],
+    count: usize, // number of numbers taken
+    remaining_to_check: usize,
+}
+
+impl<const N: usize> State<N> {
+    
+    fn available_space(&self) -> usize {
+        (self.numbers.len() - self.count)
+    }
+
+    fn update(mut self, next: u8) -> Self {
+        
+        while self.count > 0
+            && self.numbers[self.count - 1] < next
+            && self.available_space() < self.remaining_to_check
+        {
+            self.count -= 1;
+        }
+
+        if self.count < N {
+            self.numbers[self.count] = next;
+            self.count += 1;
+        }
+        self.remaining_to_check -= 1;
+        self
+    }
+}
+
+fn get_max_part2<const L: usize>(line: &str) -> u64 {
+    let numbers = [b'0'; L];
+    let numbers_len = numbers.len();
+    let init_state = State::<L> {
+        numbers,
+        count: 0,
+        remaining_to_check: line.len(),
+    };
+    line.trim()
+        .bytes()
+        .enumerate()
+        .fold(init_state, |state, (number_iteration, next)| {
+            state.update(next)
+        })
+        .numbers
+        .iter()
+        .enumerate()
+        .map(|(i, x)| ((*x - b'0') as u64) * (10_u64.pow((numbers_len - 1 - i) as u32)))
+        .sum()
+}
+
+fn get_max_linear(line: &str) -> u64 {
+    let mut decina = 0;
+    let mut pos_decina = 0;
+    let mut pos_unit = 1;
+    let mut unit = 0;
+    dbg!(line);
+    for (n, b) in line.bytes().enumerate() {
+        dbg!(b - 48);
+        if b > decina && n < LEN - 1 {
+            decina = b;
+            pos_decina = n;
+        }
+        if pos_decina > pos_unit {
+            pos_unit = pos_decina + 1;
+        }
+        if pos_unit == n {
+            unit = b;
+        }
+        if b > unit && n > 0 && n > pos_decina {
+            unit = b;
+        }
+    }
+
+    ((decina - 48) * 10 + dbg!(unit - 48)) as u64
+}
+fn get_max_linear_gemini(line: &str) -> u64 {
+    let mut max_joltage = 0;
+    let mut max_decina_so_far = 0;
+
+    // Iteriamo direttamente sui byte, senza copiare nell'array (più veloce)
+    for &b in line.as_bytes() {
+        let digit = b - b'0'; // Conversione veloce da ASCII a u8 (0-9)
+
+        // Se abbiamo già incontrato una possibile decina in precedenza,
+        // calcoliamo il valore che otterremmo accoppiandola con la cifra attuale (digit)
+        if max_decina_so_far > 0 {
+            let current_joltage = max_decina_so_far * 10 + digit;
+            if current_joltage > max_joltage {
+                max_joltage = current_joltage;
+            }
+        }
+
+        // Aggiorniamo la "miglior decina" disponibile per i numeri futuri.
+        // Se la cifra attuale è più grande di quelle viste finora, diventerà
+        // la nuova decina per i numeri alla sua destra.
+        if digit > max_decina_so_far {
+            max_decina_so_far = digit;
+        }
+    }
+
+    max_joltage as u64
+}
+
+//f9 took [5108ms, 5094ms, 4141ms, 5097ms, 5123ms]
+fn get_max(line: &str) -> u32 {
+    let mut max = 0;
+    for (n1, ch1) in line.chars().enumerate() {
+        for ch2 in line.chars().skip(n1 + 1) {
+            let pair = [ch1, ch2].into_iter().collect::<String>();
+            let pair_number = pair.parse::<u32>().unwrap();
+            max = pair_number.max(max);
+        }
+    }
+    max
+}
+
+//f8 took 3800-4800 ms [3816ms, 4753ms, 4744ms]
+fn get_max_direct_access(line: &str) -> u32 {
+    let mut max = 0;
+    let chars = line.as_bytes();
+    let len = line.len();
+    for n1 in 0..len - 1 {
+        let ch1 = chars[n1] as char;
+        for n2 in (n1 + 1)..len {
+            let ch2 = chars[n2] as char;
+            let pair_number = [ch1, ch2]
+                .into_iter()
+                .collect::<String>()
+                .parse::<u32>()
+                .unwrap();
+            max = pair_number.max(max);
+        }
+    }
+    max
+}
+//f7 took [2145ms, 2142ms, 2136ms, 2138ms]
+fn get_max_direct_access_precise_alloc(line: &str) -> u32 {
+    let mut max = 0;
+    let chars = line.as_bytes();
+    let len = line.len();
+    for n1 in 0..len - 1 {
+        let ch1 = chars[n1] as char;
+        for n2 in (n1 + 1)..len {
+            let ch2 = chars[n2] as char;
+            //et pair_number = [ch1, ch2].into_iter().collect::<String>().parse::<u32>().unwrap();
+            let mut str = String::with_capacity(2);
+            str.insert(0, ch1);
+            str.insert(1, ch2);
+
+            max = str.parse::<u32>().unwrap().max(max);
+        }
+    }
+    max
+}
+
+//f6 took [1754ms, 1768ms, 1798ms,1752ms,1753ms]
+fn get_max_indices_withcap(line: &str) -> u32 {
+    let mut max = 0;
+    let len = line.len();
+    for n1 in 0..len - 1 {
+        for n2 in (n1 + 1)..len {
+            let ch1 = line.get(n1..=n1).unwrap();
+            let ch2 = line.get(n2..=n2).unwrap();
+            let mut pair = String::with_capacity(2);
+            pair.insert_str(0, ch1);
+            pair.insert_str(1, ch2);
+            let pair_number = pair.parse::<u32>().unwrap();
+            max = pair_number.max(max);
+        }
+    }
+    max
+}
+
+//f5 took [1786ms, 1762ms, 1762ms]
+fn get_max_iterator_precise_alloc(line: &str) -> u32 {
+    let bytes = line.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .flat_map(|(n1, ch1)| {
+            bytes.iter().skip(n1 + 1).map(move |ch2| {
+                // 3487ms total
+                // let mut str = String::new();
+                // str.push(*ch1 as char);
+                // str.push(*ch2 as char);
+
+                // 3904ms total
+                // let str = [*ch1 as char, *ch2 as char].into_iter().collect::<String>();
+
+                // 1793 ms total
+                let mut str = String::with_capacity(2);
+                str.insert(0, *ch1 as char);
+                str.insert(1, *ch2 as char);
+                str.parse::<u32>().unwrap()
+            })
+        })
+        .max()
+        .unwrap()
+}
+
+//f4 took [1679ms, 1678ms, 1678ms, 1679ms, 1681ms]
+fn get_max_indices(line: &str) -> u32 {
+    let mut max = 0;
+    let len = line.len();
+    for n1 in 0..len - 1 {
+        for n2 in (n1 + 1)..len {
+            let ch1 = line.get(n1..=n1).unwrap();
+            let ch2 = line.get(n2..=n2).unwrap();
+            let pair = [ch1, ch2].into_iter().collect::<String>();
+            let pair_number = pair.parse::<u32>().unwrap();
+            max = pair_number.max(max);
+        }
+    }
+    max
+}
+
+//f3 took [61ms,61ms,61ms,61ms,61ms]
+fn get_max_indices_as_bytes(line: &str) -> u32 {
+    let mut max = 0;
+    let chars = line.as_bytes();
+    let len = line.len();
+    for n1 in 0..len - 1 {
+        for n2 in (n1 + 1)..len {
+            let ch1 = u32::from(chars[n1] - 48);
+            let ch2 = u32::from(chars[n2] - 48);
+            let pair_number = ch1 * 10 + ch2;
+            max = pair_number.max(max);
+        }
+    }
+    max
+}
+//f2 took [60ms,60ms,60ms,60ms,60ms,60ms]
+fn get_max_iterator(line: String) -> u32 {
+    let bytes = line.as_bytes();
+    bytes
+        .iter()
+        .enumerate()
+        .flat_map(|(n1, ch1)| {
+            bytes
+                .iter()
+                .skip(n1 + 1)
+                .map(move |ch2| u32::from((ch1 - 48) * 10 + ch2 - 48))
+        })
+        .max()
+        .unwrap()
+}
+
+//f1 took [59ms,59ms,59ms,59ms,59ms,59ms]
+fn get_max_claude(line: &str) -> u32 {
+    let digits: Vec<u32> = line.bytes().map(|b| (b - b'0') as u32).collect();
+    let n = digits.len();
+
+    let mut max_val = 0u32;
+
+    for i in 0..n - 1 {
+        let base = digits[i] * 10;
+        for j in i + 1..n {
+            let pair = base + digits[j];
+            if pair > max_val {
+                max_val = pair;
+            }
+        }
+    }
+
+    max_val
+}
+//f took []
+
+#[target_feature(enable = "avx2")]
+fn get_max_claude_with_array(line: String, digits_arr: &mut [u32; 100]) -> u32 {
+    let mut n = 0;
+    let mut db = line.bytes();
+    while n < LEN {
+        digits_arr[n] = (db.next().unwrap() - b'0') as u32;
+        n += 1;
+    }
+    //line.bytes().enumerate().for_each(|(i,b)| digits_arr[i] = (b - b'0') as u32);
+
+    let mut max_val = 0u32;
+
+    for i in 0..LEN - 1 {
+        let base = digits_arr[i] * 10;
+        for j in i + 1..LEN {
+            let pair = base + digits_arr[j];
+            if pair > max_val {
+                max_val = pair;
+            }
+        }
+    }
+
+    max_val
+}
+
+#[target_feature(enable = "avx2")]
+#[unsafe(no_mangle)]
+unsafe fn get_max_claude_with_array_NNAllocate(line: String, digits_arr: &mut [u32; LEN]) -> u32 {
+    //assert_eq!(line.len(), LEN);
+    //assert_eq!(digits_arr.len(), LEN);
+
+    for (digit_out, byte_in) in digits_arr.iter_mut().zip(line.bytes()) {
+        *digit_out = (byte_in.wrapping_sub(b'0')) as u32;
+    }
+
+    // We can now use it immutably, maybe llvm can optimize further
+    let digits = &*digits_arr;
+    let mut max_val = 0u32;
+
+    for (i, &val) in digits[..LEN - 1].iter().enumerate() {
+        let base = val * 10;
+
+        if base + 9 <= max_val {
+            continue;
+        }
+
+        for &unit in &digits[i + 1..] {
+            let pair = base + unit;
+            if pair > max_val {
+                max_val = pair;
+            }
+        }
+    }
+
+    max_val
+}
+
+fn sol(lines: &[&str]) -> u32 {
+    lines.iter().map(|line| get_max_claude(line)).sum()
+}

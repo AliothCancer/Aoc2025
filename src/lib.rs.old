@@ -1,0 +1,147 @@
+
+
+pub fn get_max_linear_gemini(line: &str) -> u64 {
+    let mut max_joltage = 0;
+    let mut max_decina_so_far = 0;
+
+    // Iteriamo direttamente sui byte, senza copiare nell'array (più veloce)
+    for &b in line.as_bytes() {
+        let digit = b - b'0'; // Conversione veloce da ASCII a u8 (0-9)
+
+        // Se abbiamo già incontrato una possibile decina in precedenza,
+        // calcoliamo il valore che otterremmo accoppiandola con la cifra attuale (digit)
+        if max_decina_so_far > 0 {
+            let current_joltage = max_decina_so_far * 10 + digit;
+            if current_joltage > max_joltage {
+                max_joltage = current_joltage;
+            }
+        }
+
+        // Aggiorniamo la "miglior decina" disponibile per i numeri futuri.
+        // Se la cifra attuale è più grande di quelle viste finora, diventerà
+        // la nuova decina per i numeri alla sua destra.
+        if digit > max_decina_so_far {
+            max_decina_so_far = digit;
+        }
+    }
+
+    max_joltage as u64
+}
+
+
+struct State<const N: usize> {
+    numbers: [u8; N],
+    count: usize, // number of numbers taken
+    remaining_to_check: usize,
+}
+
+impl<const N: usize> State<N> {
+    
+    fn available_space(&self) -> usize {
+        self.numbers.len() - self.count
+    }
+
+    fn update(mut self, next: u8) -> Self {
+        
+        while self.count > 0
+            && self.numbers[self.count - 1] < next
+            && self.available_space() < self.remaining_to_check
+        // Safety check corretto
+        {
+            self.count -= 1;
+        }
+
+        // 2. Fase di Inserimento
+        if self.count < N {
+            self.numbers[self.count] = next;
+            self.count += 1;
+        }
+
+        // 3. Decremento contatore globale
+        self.remaining_to_check -= 1;
+        self
+    }
+}
+#[target_feature(enable = "avx2")]
+pub unsafe fn get_max_part2<const L: usize>(line: &str) -> u64 {
+    let numbers = [b'0'; L];
+    let numbers_len = numbers.len();
+    let init_state = State::<L> {
+        numbers,
+        count: 0,
+        remaining_to_check: line.len(),
+    };
+    line.trim()
+        .bytes()
+        //.enumerate()
+        .fold(init_state, |state, next| {
+            state.update(next)
+        })
+        .numbers
+        .iter()
+        .enumerate()
+        .map(|(i, x)| ((*x - b'0') as u64) * (10_u64.pow((numbers_len - 1 - i) as u32)))
+        // .inspect(|x| {
+        //     dbg!(&x);
+        // })
+        .sum()
+}
+
+
+struct StateUsize<const N: usize> {
+    numbers: [usize; N],
+    count: usize, // number of numbers taken
+    remaining_to_check: usize,
+}
+
+impl<const N: usize> StateUsize<N> {
+    
+    fn available_space(&self) -> usize {
+        self.numbers.len() - self.count
+    }
+
+    fn update(mut self, next: usize) -> Self {
+        
+        while self.count > 0
+            && self.numbers[self.count - 1] < next
+            && self.available_space() < self.remaining_to_check
+        // Safety check corretto
+        {
+            self.count -= 1;
+        }
+
+        // 2. Fase di Inserimento
+        if self.count < N {
+            self.numbers[self.count] = next;
+            self.count += 1;
+        }
+
+        // 3. Decremento contatore globale
+        self.remaining_to_check -= 1;
+        self
+    }
+}
+
+#[target_feature(enable = "avx2")]
+pub unsafe fn get_max_part2_usize<const L: usize>(line: &str) -> usize {
+    let numbers = [b'0' as usize; L];
+    let numbers_len = numbers.len();
+    let init_state = StateUsize::<L> {
+        numbers,
+        count: 0,
+        remaining_to_check: line.len(),
+    };
+    line.trim()
+        .bytes()
+        .fold(init_state, |state, next| {
+            state.update(next as usize)
+        })
+        .numbers
+        .iter()
+        .enumerate()
+        .map(|(i, x)| ((*x - (b'0') as usize) as usize) * (10_usize.pow((numbers_len - 1 - i) as u32)))
+        // .inspect(|x| {
+        //     dbg!(&x);
+        // })
+        .sum()
+}
